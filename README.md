@@ -2,6 +2,9 @@
 
 This repository contains the code and report for the analysis of online shopper purchasing intention.
 
+## Dataset
+Sakar, C. & Kastro, Y. (2018). Online Shoppers Purchasing Intention Dataset [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5F88Q.
+
 ## Overview
 A high number of website visitors does not always equate to high revenue. This project explores the behavioral patterns of online shoppers to identify specific actions associated with purchase intention. 
 
