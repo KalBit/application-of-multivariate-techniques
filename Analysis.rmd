@@ -1,0 +1,680 @@
+---
+title: "Online Shopping Analysis"
+author: "S20820"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading Libraries
+
+
+```{r warning=FALSE, include=FALSE}
+
+library(dplyr)
+library(janitor)
+library(factoextra)
+library(corrplot)
+library(ggplot2)
+library(tidyverse)
+library(CCA)
+library(heplots)
+library(MASS)
+library(caret)
+
+set.seed(820)
+
+```
+
+
+## Loading dataset and preparation
+
+## Loading dataset
+
+```{r}
+dataset <- read.csv("./online_shoppers_intention.csv")
+
+dataset <- clean_names(dataset)
+
+dataset <- dataset %>% mutate(across(c(operating_systems, browser, region, traffic_type, visitor_type, weekend, revenue, month), as.factor))
+dataset <- dataset %>% mutate(across(c(administrative, administrative_duration, informational, informational_duration, 
+                                       product_related, product_related_duration, bounce_rates, exit_rates, page_values, special_day), as.numeric))
+
+categorical_variables <- colnames(dataset %>% dplyr::select(where(is.factor)))
+numerical_variables <- colnames(dataset %>% dplyr::select(where(is.numeric)))
+
+numerical_data <- dataset %>% dplyr::select(all_of(numerical_variables))
+categorical_data <- dataset %>% dplyr::select(all_of(categorical_variables))
+
+str(dataset)                              
+
+summary(dataset)
+
+```
+
+### Missing Value Handling
+
+```{r}
+cat("Number Of rows with missing values:", sum(dataset %>% is.na()))
+
+```
+- The dataset does not contain any missing values.
+
+
+## Exploratory Data Analysis and Data Visualization
+
+
+### Distribution of Numerical variables
+
+```{r}
+numerical_data %>% pivot_longer(cols = numerical_variables) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  facet_wrap(~ name, scales = "free", ncol=4) +
+  theme_minimal()
+
+
+```
+
+
+
+
+### Distribution of Categorical variables
+
+```{r}
+
+
+p <- categorical_data %>%
+  pivot_longer(cols = -revenue, names_to = "variable", values_to = "value") %>%
+  ggplot(aes(x = value, fill = revenue)) +
+  geom_bar(position = "fill") +
+  facet_wrap(~ variable, scales = "free_x", ncol=2) +
+  theme_minimal() +
+  labs(title = "Proportion of Purchases across Categorical Variables",
+       x = "Category Level",
+       y = "Proportion",
+       fill = "Made Purchase (Revenue)") +
+  scale_fill_manual(values = c("tomato", "steelblue")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=8))
+p
+
+# ggsave("categorical_plots.png", plot = p, width = 10, height = 10)
+
+```
+
+### Correlation
+
+```{r}
+
+cor_matrix <- cor(numerical_data)
+
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, 
+         addCoef.col = "black", number.cex = 0.7,
+         title = "Correlation Matrix of Numerical Variables", mar=c(0,0,1,0))
+
+```
+
+### Outlier Handling
+
+```{r}
+
+numeric_vars_long <- scale(numerical_data) %>%
+  as.data.frame() %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
+
+ggplot(numeric_vars_long, aes(x = Variable, y = Value, fill = Variable)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none") +
+  labs(title = "Boxplots of Standardized Numerical Variables",
+       y = "Standardized Value", x = "Variable")
+
+
+
+
+```
+
+
+
+
+```{r}
+
+is_outlier_iqr <- function(x) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR_value <- Q3 - Q1
+  
+  lower_bound <- Q1 - 1.5 * IQR_value
+  upper_bound <- Q3 + 1.5 * IQR_value
+  
+  return(x < lower_bound | x > upper_bound)
+}
+
+outlier_matrix <- sapply(numerical_data, is_outlier_iqr)
+
+rows_with_any_outlier <- rowSums(outlier_matrix) > 0
+
+total_rows <- nrow(dataset)
+outlier_rows <- sum(rows_with_any_outlier)
+percentage_removed <- (outlier_rows / total_rows) * 100
+
+cat("Total rows originally:", total_rows, "\n")
+cat("Rows flagged for removal:", outlier_rows, "\n")
+cat(sprintf("Percentage of data that would be removed: %.2f%%\n", percentage_removed))
+
+
+```
+Using Inter quartile range method to remove outliers will remove 57.36% of the data which
+is a significant amount of data.
+Therefore the outliers will not be removed.
+
+
+### Distribution of the target variable
+
+```{r}
+
+ggplot(dataset, aes(x = revenue, fill = revenue)) +
+  geom_bar() +
+  theme_minimal() +
+  labs(title = "Distribution of Revenue (Target Variable)",
+       x = "Revenue (Made a Purchase)", y = "Count") +
+  scale_fill_manual(values = c("chartreuse4", "brown3"))
+
+```
+
+
+
+
+
+## Principal Component Analysis
+
+```{r warning=FALSE}
+
+numerical_data <- dataset %>% dplyr::select(all_of(numerical_variables))
+
+pca_result <- prcomp(numerical_data, scale = TRUE)
+
+
+print("Mean:")
+pca_result$center
+print("Variance:")
+pca_result$scale
+
+
+
+```
+
+```{r}
+
+summary(pca_result)
+# According to Kaizer criteria choose 4 PCs
+variances <- pca_result$sdev^2
+print(variances)
+
+```
+
+
+
+
+```{r}
+pca_result$rotation
+
+
+
+```
+
+
+
+
+```{r}
+fviz_eig(pca_result, addlabels = TRUE, ylim = c(0, 50))
+```
+
+
+```{r}
+
+fviz_pca_var(pca_result,
+ col.var = "contrib", 
+ gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+ repel = TRUE 
+ )
+
+
+```
+
+```{r}
+var <- get_pca_var(pca_result)
+corrplot(var$cos2, is.corr=FALSE, col=COL2('RdBu'))
+
+```
+
+```{r}
+loadings <- var$coord
+print(loadings)
+
+
+```
+
+
+
+
+```{r}
+
+
+scaled_data <- as.data.frame(scale(numerical_data))
+
+
+set1 <- scaled_data %>% dplyr::select(administrative, informational, product_related)
+
+set2 <- scaled_data %>% dplyr::select(bounce_rates, exit_rates, page_values)
+
+cca_result <- cc(set1, set2)
+
+cat("Canonical Correlations:\n")
+print(cca_result$cor)
+
+cat("Coefficients for Set 1 (Actions):\n")
+print(cca_result$xcoef)
+cat("Coefficients for Set 2 (Analytics):\n")
+print(cca_result$ycoef)
+
+plt.cc(cca_result, var.label = TRUE)
+```
+
+```{r}
+
+library(CCP)
+rho <- cca_result$cor
+n <- nrow(dataset)
+p <- ncol(set1)
+q <- ncol(set2)
+p.asym(rho, n, p, q, tstat = "Wilks") #
+
+
+```
+
+
+
+```{r}
+
+u_scores <- cca_result$scores$xscores
+v_scores <- cca_result$scores$yscores
+
+
+cv_data <- data.frame(
+  CV1_Set1 = u_scores[,1], 
+  CV1_Set2 = v_scores[,1],
+  Revenue = as.factor(dataset$revenue) 
+)
+
+
+ggplot(cv_data, aes(x = CV1_Set1, y = CV1_Set2)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "red", se = FALSE) + 
+  xlim(-8, 0.9) +
+  theme_minimal() +
+  labs(
+    title = "Scatterplot of First Canonical Variate Pair",
+    subtitle = paste("Canonical Correlation =", round(cca_result$cor[1], 4)),
+    x = "Canonical Variate 1 (User Actions)",
+    y = "Canonical Variate 1 (Site Analytics)"
+  )
+
+```
+
+
+
+
+
+
+```{r}
+
+cat("\n--- Discriminant Analysis Assumption Checks ---\n")
+
+lda_data <- scaled_data
+lda_data$revenue <- as.factor(dataset$revenue)
+
+box_m_result <- boxM(lda_data[, 1:10], lda_data$revenue)
+print(box_m_result)
+
+
+lda_model <- lda(revenue ~ ., data = lda_data)
+print(lda_model)
+
+lda_predictions <- predict(lda_model)
+
+
+confusion_matrix <- table(Predicted = lda_predictions$class, Actual = lda_data$revenue)
+cat("\nConfusion Matrix:\n")
+print(confusion_matrix)
+
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+cat(sprintf("\nLDA Classification Accuracy: %.2f%%\n", accuracy * 100))
+
+lda_plot_data <- data.frame(LD1 = lda_predictions$x[,1], Revenue = lda_data$revenue)
+
+ggplot(lda_plot_data, aes(x = LD1, fill = Revenue)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "LDA: Density Plot of Discriminant Scores",
+       x = "Linear Discriminant 1 (LD1)",
+       y = "Density") +
+  scale_fill_manual(values = c("tomato", "steelblue"))
+
+
+
+
+
+```
+
+```{r}
+set.seed(4033)
+train_index <- createDataPartition(lda_data$revenue, p = 0.8, list = FALSE)
+training_data <- lda_data[train_index, ]
+test_data <- lda_data[-train_index, ]
+
+cat("\n--- Step 1: Training Data Collected ---\n")
+cat("Training set size:", nrow(training_data), "\n")
+cat("Test (Unknown) set size:", nrow(test_data), "\n")
+
+
+prior_probs <- prop.table(table(training_data$revenue))
+cat("\n--- Step 2: Estimated Prior Probabilities ---\n")
+print(prior_probs)
+
+
+cat("\n--- Step 3: Variance-Covariance Check ---\n")
+cat("Note: Box's M-test previously yielded p < 0.05. \n")
+cat("Heterogeneous matrices confirmed. QDA is the appropriate method.\n")
+
+cat("\n--- Steps 4 & 5: QDA Model Estimation ---\n")
+
+qda_model <- qda(revenue ~ ., data = training_data, prior = as.numeric(prior_probs))
+
+
+print(qda_model)
+
+cat("\n--- Step 6: Cross-Validation (Leave-One-Out) ---\n")
+
+qda_cv <- qda(revenue ~ ., data = training_data, CV = TRUE)
+
+confusion_table_cv <- table(Truth = training_data$revenue, Classified_As = qda_cv$class)
+print(confusion_table_cv)
+
+misclass_rate <- 1 - sum(diag(confusion_table_cv)) / sum(confusion_table_cv)
+cat(sprintf("Estimated overall misclassification probability: %.2f%%\n", misclass_rate * 100))
+
+cat("\n--- Step 7: Classifying Unknown Observations ---\n")
+
+
+qda_predictions <- predict(qda_model, newdata = test_data)
+
+
+cat("Predictions for the first 5 'unknown' specimens:\n")
+head(data.frame(
+  Actual_Revenue = test_data$revenue,
+  Predicted_Class = qda_predictions$class,
+  Posterior_Prob_FALSE = qda_predictions$posterior[,1],
+  Posterior_Prob_TRUE = qda_predictions$posterior[,2]
+), 5)
+
+final_confusion <- table(Truth = test_data$revenue, Classified_As = qda_predictions$class)
+final_accuracy <- sum(diag(final_confusion)) / sum(final_confusion)
+cat(sprintf("\nFinal QDA Model Accuracy on Unknown Data: %.2f%%\n", final_accuracy * 100))
+```
+
+```{r}
+
+
+train_index <- createDataPartition(lda_data$revenue, p = 0.8, list = FALSE)
+training_data <- lda_data[train_index, ]
+test_data <- lda_data[-train_index, ]
+
+
+
+# Step 2: Estimated Prior Probabilities [cite: 1546-1555]
+# Calculated from training data to reflect real-world imbalance
+prior_probs <- prop.table(table(training_data$revenue))
+
+# Step 3: Variance-Covariance Check (Performed via Box's M Test)
+# Assumption of homogeneity failed (p < 0.05), justifying QDA [cite: 1563-1564]
+
+# Steps 4 & 5: QDA Model Estimation [cite: 1569-1576]
+# Fitting the model using estimated priors
+qda_model <- qda(revenue ~ ., data = training_data, prior = as.numeric(prior_probs))
+
+# Step 6: Cross-Validation (Leave-One-Out) [cite: 624-628]
+qda_cv <- qda(revenue ~ ., data = training_data, CV = TRUE)
+
+confusion_table_cv <- table(Truth = training_data$revenue, Classified_As = qda_cv$class)
+
+# 1. Calculate Group-Specific Misclassification Probabilities p(i|j) [cite: 616-618]
+# Probability that a unit from population j is classified into population i
+misclass_probs <- prop.table(confusion_table_cv, margin = 1) 
+
+cat("\n--- Group-Specific Misclassification Probabilities ---\n")
+print(misclass_probs)
+
+# 2. Calculate Overall Misclassification Probability [cite: 628]
+overall_error <- 1 - (sum(diag(confusion_table_cv)) / sum(confusion_table_cv))
+cat(sprintf("\nOverall Misclassification Probability: %.2f%%\n", overall_error * 100))
+
+# Step 7: Classifying Unknown Observations [cite: 1585-1588]
+# Applying model to the test set
+qda_predictions <- predict(qda_model, newdata = test_data)
+
+# --- RELEVANT PLOT: Density of Posterior Probabilities ---
+# This plot visualizes the model's confidence in predicting a purchase (Revenue = TRUE)
+plot_data <- data.frame(
+  Prob_TRUE = qda_predictions$posterior[, "TRUE"],
+  Actual_Revenue = test_data$revenue
+)
+
+ggplot(plot_data, aes(x = Prob_TRUE, fill = Actual_Revenue)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(
+    title = "QDA: Distribution of Posterior Probabilities for Purchase Intent",
+    subtitle = "Visualizing class separation and model certainty",
+    x = "Posterior Probability of Revenue = TRUE",
+    y = "Density",
+    fill = "Actual Revenue"
+  ) +
+  scale_fill_manual(values = c("tomato", "steelblue"))
+```
+```{r}
+d_data <- as.data.frame(pca_result$x[, 1:4])
+d_data$revenue <- dataset$revenue
+
+# Step 2: Data Partitioning (80% Train, 20% Test)
+set.seed(4033) 
+train_idx <- createDataPartition(d_data$revenue, p = 0.8, list = FALSE)
+train <- d_data[train_idx, ]
+test <- d_data[-train_idx, ]
+
+# Step 3: Assumption Check on PCs (Box's M Test) [cite: 460-461]
+# Re-testing homogeneity because PCA changes the variance structure.
+box_m_pc <- boxM(d_data[, 1:4], d_data$revenue)
+cat("\n--- Box's M Test for PC Predictors ---\n")
+print(box_m_pc)
+
+# Step 4 & 5: QDA Model Estimation using PC Scores
+# Note: PCA components are orthogonal, which stabilizes the estimation.
+qda_model <- qda(revenue ~ ., data = train)
+
+# Step 6: Cross-Validation (LOOCV)
+qda_cv <- qda(revenue ~ ., data = train, CV = TRUE)
+conf_matrix_cv <- table(Truth = train$revenue, Classified = qda_cv$class)
+cat("\n--- PC-based QDA Cross-Validation Table ---\n")
+print(conf_matrix_cv)
+
+# Step 7: Final Accuracy on Unknown PC Data
+qda_preds <- predict(qda_model, newdata = test)
+final_acc_pc <- sum(diag(table(test$revenue, qda_preds$class))) / nrow(test)
+cat(sprintf("\nFinal PCDA Accuracy: %.2f%%\n", final_acc_pc * 100))
+
+plot_data <- data.frame(
+  Prob_TRUE = qda_preds$posterior[, "TRUE"],
+  Actual_Revenue = test$revenue
+)
+
+ggplot(plot_data, aes(x = Prob_TRUE, fill = Actual_Revenue)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(
+    title = "QDA: Distribution of Posterior Probabilities for Purchase Intent",
+    subtitle = "Visualizing class separation and model certainty",
+    x = "Posterior Probability of Revenue = TRUE",
+    y = "Density",
+    fill = "Actual Revenue"
+  ) +
+  scale_fill_manual(values = c("tomato", "steelblue"))
+```
+
+```{r}
+
+# ==============================================================================
+# DISCRIMINANT ANALYSIS: ONLINE SHOPPER INTENTION
+# Method: Principal Component Discriminant Analysis (PCDA) using QDA
+# ==============================================================================
+
+# --- Step 1: Data Preparation & PC Extraction --- [cite: 446-447]
+# Extract the first 4 Principal Components (capturing ~72% variance)
+d_data <- as.data.frame(pca_result$x[, 1:4])
+d_data$revenue <- dataset$revenue
+
+# Split into Training (80%) and Test (20%) sets [cite: 617-619]
+# Training set is for model building (Steps 2-6); Test set for Step 7.
+set.seed(4033) 
+train_idx <- createDataPartition(d_data$revenue, p = 0.8, list = FALSE)
+training_set <- d_data[train_idx, ]
+test_set <- d_data[-train_idx, ]
+
+# --- Step 2: Prior Probabilities --- [cite: 449-451]
+# Calculate estimated prior probabilities from the training data [cite: 457-458]
+prior_probs <- prop.table(table(training_set$revenue))
+cat("\n--- Step 2: Estimated Prior Probabilities ---\n")
+print(prior_probs)
+
+# --- Step 3: Assumption Check - Homogeneity of Covariance --- [cite: 459-461]
+# Performing Box's M Test (Multivariate extension of Bartlett's Test)
+# Null Hypothesis (H0): Covariance matrices are equal across groups [cite: 462-463]
+box_m_pc <- boxM(training_set[, 1:4], training_set$revenue)
+cat("\n--- Step 3: Box's M Test for Homogeneity ---\n")
+print(box_m_pc) 
+# Note: If p < 0.05, we reject H0 and MUST use QDA [cite: 466-468].
+
+# --- Step 4: Assumption Check - Multivariate Normality --- [cite: 477]
+# Visual diagnostic using a Chi-Square Q-Q Plot of Mahalanobis Distances
+mu <- colMeans(training_set[, 1:4])
+sigma <- var(training_set[, 1:4])
+d2 <- mahalanobis(training_set[, 1:4], center = mu, cov = sigma)
+
+qqplot(qchisq(ppoints(nrow(training_set)), df = 4), d2,
+       main = "Step 4: Chi-Square Q-Q Plot for PC Normality",
+       xlab = "Theoretical Chi-Square Quantiles",
+       ylab = "Sample Mahalanobis Distances",
+       pch = 20, col = "steelblue")
+abline(0, 1, col = "tomato", lwd = 2)
+
+# --- Step 5: Compute Discriminant Functions (QDA) --- [cite: 478, 664-666]
+# Heterogeneous matrices (Step 3) justify Quadratic Score Functions [cite: 694]
+qda_model <- qda(revenue ~ ., data = training_set, prior = as.numeric(prior_probs))
+
+# --- Step 6: Misclassification Probabilities (Cross-Validation) --- [cite: 480-482]
+# Using Leave-One-Out Cross-Validation (LOOCV) for unbiased estimates [cite: 624-628]
+qda_cv <- qda(revenue ~ ., data = training_set, CV = TRUE)
+conf_matrix_cv <- table(Truth = training_set$revenue, Classified_As = qda_cv$class)
+
+# Calculate group-specific and overall misclassification rates [cite: 615-618]
+misclass_probs <- prop.table(conf_matrix_cv, margin = 1)
+overall_error <- 1 - (sum(diag(conf_matrix_cv)) / sum(conf_matrix_cv))
+
+cat("\n--- Step 6: Cross-Validation Error Metrics ---\n")
+print(misclass_probs)
+cat(sprintf("Overall Misclassification Probability: %.2f%%\n", overall_error * 100))
+
+# --- Step 7: Classify Unknown Observations --- [cite: 488]
+# Applying the finalized model to the 20% "Unknown" test set [cite: 700-704]
+final_preds <- predict(qda_model, newdata = test_set)
+
+# Final Accuracy Check
+final_conf <- table(Truth = test_set$revenue, Predicted = final_preds$class)
+final_acc <- sum(diag(final_conf)) / sum(final_conf)
+cat(sprintf("\n--- Step 7: Final Test Accuracy: %.2f%% ---\n", final_acc * 100))
+
+# Visualization: Distribution of Posterior Probabilities
+plot_df <- data.frame(Prob_TRUE = final_preds$posterior[, "TRUE"], 
+                      Actual = test_set$revenue)
+
+ggplot(plot_df, aes(x = Prob_TRUE, fill = Actual)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "QDA: Classification Confidence (Posterior Probabilities)",
+       x = "Probability of Purchase (Revenue = TRUE)", y = "Density") +
+  scale_fill_manual(values = c("tomato", "steelblue"))
+
+```
+
+```{r}
+
+d_data <- as.data.frame(pca_result$x[, 1:4])
+d_data$revenue <- dataset$revenue
+
+
+train_idx <- createDataPartition(d_data$revenue, p = 0.8, list = FALSE)
+train <- d_data[train_idx, ]
+test <- d_data[-train_idx, ]
+
+
+box_m_pc <- boxM(train[, 1:4], train$revenue)
+print(box_m_pc)
+
+
+mu <- colMeans(train[, 1:4])
+sigma <- var(train[, 1:4])
+d2 <- mahalanobis(train[, 1:4], center = mu, cov = sigma)
+
+qqplot(qchisq(ppoints(nrow(train)), df = 4), d2,
+       main = "Chi-Square Q-Q Plot for PCs",
+       xlab = "Theoretical Chi-Square Quantiles",
+       ylab = "Sample Mahalanobis Distances",
+       pch = 20, col = "steelblue")
+abline(0, 1, col = "tomato", lwd = 2)
+
+
+qda_model <- qda(revenue ~ ., data = train)
+
+qda_cv <- qda(revenue ~ ., data = train, CV = TRUE)
+conf_matrix_cv <- table(Truth = train$revenue, Classified = qda_cv$class)
+
+print(prop.table(conf_matrix_cv, margin = 1)) 
+
+overall_error_pc <- 1 - (sum(diag(conf_matrix_cv)) / sum(conf_matrix_cv))
+cat(sprintf("Overall CV Misclassification Probability: %.2f%%\n", overall_error_pc * 100))
+
+qda_preds <- predict(qda_model, newdata = test)
+final_acc_pc <- sum(diag(table(test$revenue, qda_preds$class))) / nrow(test)
+cat(sprintf("\nFinal PCDA Accuracy: %.2f%%\n", final_acc_pc * 100))
+
+plot_data <- data.frame(
+  Prob_TRUE = qda_preds$posterior[, "TRUE"],
+  Actual_Revenue = test$revenue
+)
+
+ggplot(plot_data, aes(x = Prob_TRUE, fill = Actual_Revenue)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(
+    title = "Posterior Probabilities for Purchase Intent",
+    x = "Posterior Probability of Revenue = TRUE",
+    y = "Density",
+    fill = "Actual Revenue"
+  ) +
+  scale_fill_manual(values = c("tomato", "steelblue"))
+
+```
+
